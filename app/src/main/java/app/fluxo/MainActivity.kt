@@ -27,7 +27,9 @@ import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FloatingActionButton
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -95,7 +97,7 @@ fun HomeScreen(onEdit: (Routine) -> Unit, onSetup: () -> Unit, onLog: () -> Unit
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Fluxo") },
+                title = { Text("Fluxo", style = MaterialTheme.typography.headlineMedium) },
                 actions = {
                     IconButton(onClick = onLog) { Icon(Icons.Outlined.History, "Registro") }
                     IconButton(onClick = onSetup) { Icon(Icons.Outlined.Settings, "Configuração") }
@@ -135,21 +137,40 @@ fun HomeScreen(onEdit: (Routine) -> Unit, onSetup: () -> Unit, onLog: () -> Unit
                 }
             }
             items(routines, key = { it.id }) { r ->
-                Card(Modifier.fillMaxWidth().clickable { onEdit(r) }) {
-                    Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text(r.name, style = MaterialTheme.typography.titleMedium)
-                            Text(
-                                "Quando: " + r.triggers.joinToString(" · ") { Catalog.label(Kind.TRIGGER, it.type, it.params) }
-                                    .ifBlank { "sem gatilho" },
-                                style = MaterialTheme.typography.bodySmall,
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                            Text("${r.steps.size} passo(s)", style = MaterialTheme.typography.labelSmall)
+                Card(
+                    Modifier.fillMaxWidth().clickable { onEdit(r) },
+                    shape = RoundedCornerShape(24.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = if (r.enabled) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh,
+                    ),
+                ) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(r.name, Modifier.weight(1f), style = MaterialTheme.typography.titleLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Switch(checked = r.enabled, onCheckedChange = { Store.save(r.copy(enabled = it)) })
                         }
-                        IconButton(onClick = { Engine.run(ctx, r, "manual") }) { Icon(Icons.Filled.PlayArrow, "Rodar agora") }
-                        Switch(checked = r.enabled, onCheckedChange = { Store.save(r.copy(enabled = it)) })
+                        if (r.triggers.isEmpty()) {
+                            Text("Sem gatilho — só roda no ▶", style = MaterialTheme.typography.bodySmall)
+                        } else {
+                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                r.triggers.take(3).forEach { t ->
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        IconChip(Catalog.find(Kind.TRIGGER, t.type)?.category)
+                                        Spacer(Modifier.width(10.dp))
+                                        Text(Catalog.label(Kind.TRIGGER, t.type, t.params), style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    }
+                                }
+                                if (r.triggers.size > 3) Text("+${r.triggers.size - 3} gatilhos", style = MaterialTheme.typography.labelSmall)
+                            }
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("${r.steps.size} passo(s)", Modifier.weight(1f), style = MaterialTheme.typography.labelMedium)
+                            FilledTonalButton(onClick = { Engine.run(ctx, r, "manual") }) {
+                                Icon(Icons.Filled.PlayArrow, null)
+                                Spacer(Modifier.width(4.dp))
+                                Text("Rodar")
+                            }
+                        }
                     }
                 }
             }

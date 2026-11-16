@@ -59,8 +59,47 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import android.content.pm.PackageManager
+import androidx.compose.foundation.background
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.filled.*
+import androidx.compose.ui.graphics.vector.ImageVector
 
 // ───────────────────────── helpers ─────────────────────────
+
+fun iconFor(cat: String?): ImageVector = when (cat) {
+    "Conexões" -> Icons.Filled.Wifi
+    "Som", "Câmera e som" -> Icons.Filled.VolumeUp
+    "Tela", "Interface" -> Icons.Filled.Smartphone
+    "Bateria", "Bateria e energia" -> Icons.Filled.BatteryChargingFull
+    "Chamadas", "Telefonia" -> Icons.Filled.Call
+    "Tempo", "Data e hora" -> Icons.Filled.Schedule
+    "Apps" -> Icons.Filled.Apps
+    "Dispositivo", "Ajustes" -> Icons.Filled.Tune
+    "Lógica", "Fluxo" -> Icons.Filled.CallSplit
+    "Manual" -> Icons.Filled.TouchApp
+    "Arquivos", "Conteúdo" -> Icons.Filled.Folder
+    "Local" -> Icons.Filled.LocationOn
+    "Mensagens" -> Icons.Filled.Message
+    "Sensores" -> Icons.Filled.Sensors
+    "Avançado", "Geral" -> Icons.Filled.Code
+    else -> Icons.Filled.Bolt
+}
+
+@Composable
+fun IconChip(cat: String?, isIf: Boolean = false) {
+    val bg = if (isIf) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.primaryContainer
+    val fg = if (isIf) MaterialTheme.colorScheme.onTertiary else MaterialTheme.colorScheme.onPrimaryContainer
+    Box(Modifier.size(36.dp).background(bg, CircleShape), contentAlignment = Alignment.Center) {
+        Icon(if (isIf) Icons.Filled.CallSplit else iconFor(cat), null, tint = fg, modifier = Modifier.size(20.dp))
+    }
+}
+
 
 private fun <T> List<T>.replaced(i: Int, x: T): List<T> = toMutableList().also { it[i] = x }
 private fun <T> List<T>.swapped(a: Int, b: Int): List<T> = toMutableList().also {
@@ -139,8 +178,10 @@ fun EditorScreen(initial: Routine, onClose: () -> Unit) {
                 val spec = Catalog.find(Kind.TRIGGER, t.type)
                 Card(Modifier.fillMaxWidth().clickable(enabled = spec != null && spec.params.isNotEmpty()) {
                     spec?.let { sp -> dlg = Dlg.Params(sp, t.params) { p -> r = r.copy(triggers = r.triggers.replaced(i, t.copy(params = p))) } }
-                }) {
+                }, shape = RoundedCornerShape(20.dp)) {
                     Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                        IconChip(spec?.category)
+                        Spacer(Modifier.width(12.dp))
                         Text(Catalog.label(Kind.TRIGGER, t.type, t.params), Modifier.weight(1f))
                         IconButton(onClick = { spec?.let { dlg = Dlg.Params(it, t.params) { _ -> } } }) { Icon(Icons.Outlined.Info, "Ajuda") }
                         IconButton(onClick = { r = r.copy(triggers = r.triggers.filterIndexed { j, _ -> j != i }) }) { Icon(Icons.Outlined.Delete, "Remover") }
@@ -172,6 +213,8 @@ private fun Tag(t: String) {
     Text(t, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.tertiary)
 }
 
+private val tertiaryLine = Color(0x667D5260)
+
 private fun condText(c: Cond): String =
     if (c.items.isEmpty()) "(sempre verdadeiro)"
     else c.items.joinToString(if (c.op == "or") "  OU  " else "  E  ") {
@@ -190,11 +233,14 @@ private fun StepList(steps: List<Step>, open: (Dlg) -> Unit, onChange: (List<Ste
                     if (isIf) open(Dlg.CondEdit(s.cond) { c -> onChange(steps.replaced(i, s.copy(cond = c))) })
                     else spec?.let { sp -> open(Dlg.Params(sp, s.params) { p -> onChange(steps.replaced(i, s.copy(params = p))) }) }
                 },
+                shape = RoundedCornerShape(20.dp),
                 colors = CardDefaults.cardColors(
-                    containerColor = if (isIf) MaterialTheme.colorScheme.tertiaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+                    containerColor = if (isIf) MaterialTheme.colorScheme.tertiaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh,
                 ),
             ) {
                 Row(Modifier.padding(start = 12.dp, top = 4.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    IconChip(spec?.category, isIf)
+                    Spacer(Modifier.width(12.dp))
                     Text(title, Modifier.weight(1f), maxLines = 3, overflow = TextOverflow.Ellipsis)
                     if (i > 0) IconButton(onClick = { onChange(steps.swapped(i, i - 1)) }) { Icon(Icons.Filled.KeyboardArrowUp, "Subir") }
                     if (i < steps.lastIndex) IconButton(onClick = { onChange(steps.swapped(i, i + 1)) }) { Icon(Icons.Filled.KeyboardArrowDown, "Descer") }
@@ -202,7 +248,9 @@ private fun StepList(steps: List<Step>, open: (Dlg) -> Unit, onChange: (List<Ste
                 }
             }
             if (isIf) {
-                Column(Modifier.padding(start = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(Modifier.padding(start = 18.dp).drawBehind {
+                    drawLine(tertiaryLine, Offset(-10f, 0f), Offset(-10f, size.height), strokeWidth = 4f)
+                }.padding(start = 6.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Tag("ENTÃO (se for verdadeiro)")
                     StepList(s.then, open) { n -> onChange(steps.replaced(i, s.copy(then = n))) }
                     Tag("SENÃO (se for falso)")
