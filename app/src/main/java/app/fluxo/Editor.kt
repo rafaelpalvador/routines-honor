@@ -14,6 +14,10 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
@@ -356,8 +360,13 @@ fun PickerSheet(kind: Kind, onDismiss: () -> Unit, onSelect: (Spec) -> Unit) {
         it.kind == kind && (adv || !it.advanced) && (catSel == null || it.category == catSel) &&
             (q.isBlank() || (it.title + " " + it.summary + " " + it.category).contains(q, ignoreCase = true))
     }
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(Modifier.padding(horizontal = 16.dp)) {
+    androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss, properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
+      androidx.compose.material3.Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
+        Column(Modifier.fillMaxSize().padding(horizontal = 16.dp).statusBarsPadding().navigationBarsPadding()) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onDismiss) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Voltar") }
+                Text(if (kind == Kind.TRIGGER) "Escolher gatilho (QUANDO)" else if (kind == Kind.CONDITION) "Escolher condição" else "Escolher ação (FAZER)", style = MaterialTheme.typography.titleMedium)
+            }
             OutlinedTextField(q, { q = it }, label = { Text("Buscar") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
             Row(Modifier.horizontalScroll(rememberScrollState()).padding(vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 FilterChip(selected = catSel == null, onClick = { catSel = null }, label = { Text("Todas") })
@@ -368,7 +377,7 @@ fun PickerSheet(kind: Kind, onDismiss: () -> Unit, onSelect: (Spec) -> Unit) {
                 Spacer(Modifier.width(8.dp))
                 Text("Mostrar opções avançadas")
             }
-            LazyColumn(Modifier.heightIn(max = 480.dp)) {
+            LazyColumn(Modifier.weight(1f).fillMaxWidth()) {
                 list.groupBy { it.category }.forEach { (cat, specs) ->
                     item(key = "h$cat") {
                         Text(cat, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(top = 12.dp))
@@ -384,6 +393,7 @@ fun PickerSheet(kind: Kind, onDismiss: () -> Unit, onSelect: (Spec) -> Unit) {
                 }
             }
         }
+      }
     }
     info?.let { InfoDialog(it) { info = null } }
 }
@@ -395,18 +405,21 @@ fun ParamDialog(spec: Spec, initial: Map<String, String>, onDismiss: () -> Unit,
     val values = remember {
         mutableStateMapOf<String, String>().apply { spec.params.forEach { put(it.key, initial[it.key] ?: it.def) } }
     }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(spec.title) },
-        text = {
-            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                InfoBox(spec)
-                spec.params.forEach { p -> ParamField(p, values[p.key].orEmpty()) { values[p.key] = it } }
+    androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss, properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
+        androidx.compose.material3.Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
+            Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding()) {
+                Row(Modifier.padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = onDismiss) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Voltar") }
+                    Text(spec.title, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+                    androidx.compose.material3.Button(onClick = { onOk(values.toMap()) }) { Text("OK") }
+                }
+                Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    InfoBox(spec)
+                    spec.params.forEach { p -> ParamField(p, values[p.key].orEmpty()) { values[p.key] = it } }
+                }
             }
-        },
-        confirmButton = { TextButton(onClick = { onOk(values.toMap()) }) { Text("OK") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancelar") } },
-    )
+        }
+    }
 }
 
 private val DAY_NAMES = listOf("Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom")
