@@ -61,7 +61,7 @@ object Conditions {
                 else -> if (na != null && nb != null) na == nb else a == b
             }
         }
-        else -> AutomateConds.eval(ctx, type, p) ?: ShortcutsActions.cond(ctx, type, p, vars) ?: false
+        else -> AutomateConds.eval(ctx, type, p) ?: MoreActions.cond(ctx, type, p) ?: ShortcutsActions.cond(ctx, type, p, vars) ?: false
     }
 }
 
@@ -97,6 +97,9 @@ object Engine {
             "boot", "shake", "volume", "timezone" -> true
             "interval" -> d["tid"] == t.id
             "place", "sun" -> d["tid"] == t.id && p["when"] == d["state"]
+            "nfc" -> p["tag"].isNullOrBlank() || p["tag"] == d["id"]
+            "tile" -> p["n"] == d["n"]
+            "cal_event" -> d["tid"] == t.id && (p["contains"].isNullOrBlank() || d["title"].orEmpty().contains(p["contains"].orEmpty(), ignoreCase = true))
             "app_open" -> p["pkg"].orEmpty() == d["pkg"] && p["when"] == d["state"]
             "app_install" -> p["when"] == d["state"] && (p["pkg"].isNullOrBlank() || p["pkg"] == d["pkg"])
             "notification" -> (p["pkg"].isNullOrBlank() || p["pkg"] == d["pkg"]) &&
@@ -129,7 +132,7 @@ object Engine {
         }
     }
 
-    private suspend fun runSteps(ctx: Context, steps: List<Step>) {
+    private suspend fun runSteps(ctx: Context, steps: List<Step>, strict: Boolean = false) {
         for (s in steps) {
             if (s.kind == "loop") {
                 val pr = s.params.mapValues { sub(ctx, it.value) }
@@ -139,12 +142,28 @@ object Engine {
                 RunLog.add("   REPETIR → ${list.size}x")
                 for ((n, v) in list.withIndex().take(1000)) {
                     vars[iv] = v; vars["indice"] = (n + 1).toString()
-                    runSteps(ctx, s.then)
+                    runSteps(ctx, s.then, strict)
+                }
+            } else if (s.kind == "try") {
+                try {
+                    runSteps(ctx, s.then, true)
+                } catch (e: StopSignal) {
+                    throw e
+                } catch (e: Exception) {
+                    vars["erro"] = e.message ?: "erro"
+                    RunLog.add("   ⚠ falhou: ${e.message}")
+                    runSteps(ctx, s.otherwise, strict)
+                }
+            } else if (s.kind == "until") {
+                val t0 = System.currentTimeMillis()
+                while (!Conditions.eval(ctx, s.cond, vars)) {
+                    if (System.currentTimeMillis() - t0 > 300_000) { RunLog.add("   ⏱ ESPERAR ATÉ: passou de 5 min"); break }
+                    kotlinx.coroutines.delay(1500)
                 }
             } else if (s.kind == "if") {
                 val ok = Conditions.eval(ctx, s.cond, vars)
                 RunLog.add("   SE → ${if (ok) "verdadeiro" else "falso"}")
-                runSteps(ctx, if (ok) s.then else s.otherwise)
+                runSteps(ctx, if (ok) s.then else s.otherwise, strict)
             } else {
                 val title = Catalog.find(Kind.ACTION, s.type)?.title ?: s.type
                 try {
@@ -154,6 +173,7 @@ object Engine {
                     throw e
                 } catch (e: Exception) {
                     RunLog.add("   ✗ $title: ${e.message}")
+                    if (strict) throw e
                 }
             }
         }
@@ -162,7 +182,7 @@ object Engine {
     /** Troca {bateria}, {hora}, {wifi} e {suaVariavel} pelos valores atuais. */
     internal fun sub(ctx: Context, s: String): String {
         if (!s.contains('{')) return s
-        return Regex("\\{(\\w+)\\}").replace(s) { m ->
+        return Regex("\\{([\\w.]+)\\}").replace(s) { m ->
             when (val k = m.groupValues[1]) {
                 "bateria" -> runCatching { Dev.battery(ctx).toString() }.getOrDefault("?")
                 "hora" -> java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Date())

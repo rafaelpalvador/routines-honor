@@ -6,6 +6,10 @@ import android.service.notification.StatusBarNotification
 
 /** Lê as notificações que chegam (gatilho "Notificação recebida"). */
 class NotifService : NotificationListenerService() {
+    companion object { @Volatile var instance: NotifService? = null }
+    override fun onListenerConnected() { instance = this }
+    override fun onListenerDisconnected() { instance = null }
+
     override fun onNotificationPosted(sbn: StatusBarNotification) {
         if (sbn.packageName == packageName) return
         val n = sbn.notification

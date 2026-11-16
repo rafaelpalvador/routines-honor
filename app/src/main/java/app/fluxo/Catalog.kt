@@ -289,7 +289,7 @@ object Catalog {
             "Abre um endereço (site ou link de app) no navegador ou no app que o suporta.",
             "Digite o endereço completo, com https://.", "Cheguei em casa → abrir a página do painel de casa.",
             P("url", "Endereço", def = "https://"), shizuku = true, advanced = true),
-    ) + ShortcutsCatalog.all + AutomateCatalog.all
+    ) + ShortcutsCatalog.all + AutomateCatalog.all + MoreCatalog.all
 
     fun find(kind: Kind, id: String): Spec? = all.firstOrNull { it.kind == kind && it.id == id }
 

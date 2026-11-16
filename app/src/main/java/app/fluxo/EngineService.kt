@@ -265,7 +265,7 @@ class EngineService : Service() {
         if (trigs("shake").isNotEmpty()) startShake() else stopShake()
         if (trigs("place").isNotEmpty()) startPlaces() else stopPlaces()
         if (trigs("app_open").isNotEmpty()) startUsage() else { usageJob?.cancel(); usageJob = null }
-        if (trigs("interval").isNotEmpty() || trigs("sun").isNotEmpty()) startTick() else { tickJob?.cancel(); tickJob = null }
+        if (trigs("interval").isNotEmpty() || trigs("sun").isNotEmpty() || trigs("cal_event").isNotEmpty()) startTick() else { tickJob?.cancel(); tickJob = null }
     }
 
     private fun startShake() {
@@ -367,6 +367,13 @@ class EngineService : Service() {
                     if (now in target until target + 60_000L && sunDone[t.id] != key) {
                         sunDone[t.id] = key
                         fire("sun", "tid" to t.id, "state" to (if (rise) "sunrise" else "sunset"))
+                    }
+                }
+                trigs("cal_event").forEach { t ->
+                    val before = (t.params["before"]?.trim()?.toLongOrNull() ?: 0L) * 60_000L
+                    MoreActions.calendarStarting(applicationContext, now + before, 25_000L).forEach { (id, title) ->
+                        val key = t.id + id + (now + before) / 3_600_000L
+                        if (sunDone.put(key, "1") == null) fire("cal_event", "tid" to t.id, "title" to title, "var.evento_titulo" to title)
                     }
                 }
                 delay(20_000)

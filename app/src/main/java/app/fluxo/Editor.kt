@@ -88,6 +88,10 @@ fun iconFor(cat: String?): ImageVector = when (cat) {
     "Local" -> Icons.Filled.LocationOn
     "Mensagens" -> Icons.Filled.Message
     "Sensores" -> Icons.Filled.Sensors
+    "Janelas" -> Icons.Filled.ChatBubble
+    "Imagem" -> Icons.Filled.Image
+    "Variáveis" -> Icons.Filled.DataObject
+    "Listas" -> Icons.Filled.FormatListBulleted
     "Avançado", "Geral" -> Icons.Filled.Code
     else -> Icons.Filled.Bolt
 }
@@ -195,6 +199,15 @@ fun EditorScreen(initial: Routine, onClose: () -> Unit) {
 
             SectionTitle("FAZER", "Os passos rodam de cima para baixo. Use Se/Senão para decidir o caminho.")
             StepList(r.steps, { dlg = it }) { r = r.copy(steps = it) }
+            val shortcutCtx = androidx.compose.ui.platform.LocalContext.current
+            OutlinedButton(onClick = {
+                val si = androidx.core.content.pm.ShortcutInfoCompat.Builder(shortcutCtx, "rt_" + r.id)
+                    .setShortLabel(r.name.ifBlank { "Rotina" })
+                    .setIcon(androidx.core.graphics.drawable.IconCompat.createWithResource(shortcutCtx, android.R.drawable.ic_media_play))
+                    .setIntent(Intent(shortcutCtx, RunActivity::class.java).setAction(Intent.ACTION_VIEW).putExtra("rid", r.id))
+                    .build()
+                androidx.core.content.pm.ShortcutManagerCompat.requestPinShortcut(shortcutCtx, si, null)
+            }) { Text("Criar atalho na tela inicial") }
             Spacer(Modifier.width(24.dp))
         }
     }
@@ -227,21 +240,29 @@ private fun StepList(steps: List<Step>, open: (Dlg) -> Unit, onChange: (List<Ste
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         steps.forEachIndexed { i, s ->
             val isIf = s.kind == "if"
-            val isLoop = s.kind == "loop"
-            val title = if (isIf) "SE  " + condText(s.cond) else if (isLoop) "REPETIR · " + Catalog.label(Kind.ACTION, "loop", s.params).removePrefix("Repetir: ") else Catalog.label(Kind.ACTION, s.type, s.params)
-            val spec = if (isIf) null else Catalog.find(Kind.ACTION, if (isLoop) "loop" else s.type)
+            val isUntil = s.kind == "until"
+            val isBlock = s.kind == "loop" || s.kind == "try"
+            val special = isIf || isUntil || isBlock
+            val title = when {
+                isIf -> "SE  " + condText(s.cond)
+                isUntil -> "ESPERAR ATÉ  " + condText(s.cond)
+                s.kind == "loop" -> "REPETIR · " + Catalog.label(Kind.ACTION, "loop", s.params).removePrefix("Repetir: ")
+                s.kind == "try" -> "TENTAR"
+                else -> Catalog.label(Kind.ACTION, s.type, s.params)
+            }
+            val spec = if (isIf) null else Catalog.find(Kind.ACTION, if (s.kind == "loop" || s.kind == "try" || isUntil) s.kind else s.type)
             Card(
                 Modifier.fillMaxWidth().clickable {
-                    if (isIf) open(Dlg.CondEdit(s.cond) { c -> onChange(steps.replaced(i, s.copy(cond = c))) })
-                    else spec?.let { sp -> open(Dlg.Params(sp, s.params) { p -> onChange(steps.replaced(i, s.copy(params = p))) }) }
+                    if (isIf || isUntil) open(Dlg.CondEdit(s.cond) { c -> onChange(steps.replaced(i, s.copy(cond = c))) })
+                    else if (s.kind != "try") spec?.let { sp -> open(Dlg.Params(sp, s.params) { p -> onChange(steps.replaced(i, s.copy(params = p))) }) }
                 },
                 shape = RoundedCornerShape(20.dp),
                 colors = CardDefaults.cardColors(
-                    containerColor = if (isIf || isLoop) MaterialTheme.colorScheme.tertiaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh,
+                    containerColor = if (special) MaterialTheme.colorScheme.tertiaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh,
                 ),
             ) {
                 Row(Modifier.padding(start = 12.dp, top = 4.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                    IconChip(spec?.category, isIf || isLoop)
+                    IconChip(spec?.category, special)
                     Spacer(Modifier.width(12.dp))
                     Text(title, Modifier.weight(1f), maxLines = 3, overflow = TextOverflow.Ellipsis)
                     if (i > 0) IconButton(onClick = { onChange(steps.swapped(i, i - 1)) }) { Icon(Icons.Filled.KeyboardArrowUp, "Subir") }
@@ -249,12 +270,16 @@ private fun StepList(steps: List<Step>, open: (Dlg) -> Unit, onChange: (List<Ste
                     IconButton(onClick = { onChange(steps.filterIndexed { j, _ -> j != i }) }) { Icon(Icons.Outlined.Delete, "Remover") }
                 }
             }
-            if (isLoop) {
+            if (isBlock) {
                 Column(Modifier.padding(start = 18.dp).drawBehind {
                     drawLine(tertiaryLine, Offset(-10f, 0f), Offset(-10f, size.height), strokeWidth = 4f)
                 }.padding(start = 6.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Tag("FAÇA (a cada repetição)")
+                    Tag(if (s.kind == "try") "TENTAR (se algo falhar, vai para baixo)" else "FAÇA (a cada repetição)")
                     StepList(s.then, open) { n -> onChange(steps.replaced(i, s.copy(then = n))) }
+                    if (s.kind == "try") {
+                        Tag("SE FALHAR (o erro fica em {erro})")
+                        StepList(s.otherwise, open) { n -> onChange(steps.replaced(i, s.copy(otherwise = n))) }
+                    }
                 }
             }
             if (isIf) {
@@ -270,7 +295,7 @@ private fun StepList(steps: List<Step>, open: (Dlg) -> Unit, onChange: (List<Ste
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = {
-                open(Dlg.Pick(Kind.ACTION) { sp, p -> onChange(steps + (if (sp.id == "loop") Step(kind = "loop", type = "loop", params = p) else Step(type = sp.id, params = p))) })
+                open(Dlg.Pick(Kind.ACTION) { sp, p -> onChange(steps + (if (sp.id == "loop" || sp.id == "try" || sp.id == "until") Step(kind = sp.id, type = sp.id, params = p) else Step(type = sp.id, params = p))) })
             }) { Icon(Icons.Filled.Add, null); Spacer(Modifier.width(4.dp)); Text("Ação") }
             OutlinedButton(onClick = {
                 val st = Step(kind = "if")
