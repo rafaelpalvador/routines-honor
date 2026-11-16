@@ -86,6 +86,10 @@ fun SetupScreen(onBack: () -> Unit) {
             has(Manifest.permission.READ_PHONE_STATE), "Permitir") { permLauncher.launch(Manifest.permission.READ_PHONE_STATE) },
         Item("Câmera (lanterna)", "Necessária para ligar a lanterna.",
             has(Manifest.permission.CAMERA), "Permitir") { permLauncher.launch(Manifest.permission.CAMERA) },
+        Item("SMS (opcional)", "Só para o bloco 'Enviar SMS'.",
+            has(Manifest.permission.SEND_SMS), "Permitir") { permLauncher.launch(Manifest.permission.SEND_SMS) },
+        Item("Arquivos de áudio (opcional)", "Só para o bloco 'Tocar um som'.",
+            has(Manifest.permission.READ_MEDIA_AUDIO), "Permitir") { permLauncher.launch(Manifest.permission.READ_MEDIA_AUDIO) },
         Item("Alarmes e lembretes", "Necessário para o gatilho de horário rodar na hora certa.",
             ctx.getSystemService(AlarmManager::class.java).canScheduleExactAlarms(), "Abrir") {
             open(Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, pkgUri))

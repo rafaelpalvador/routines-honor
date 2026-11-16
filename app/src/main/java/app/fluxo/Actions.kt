@@ -14,7 +14,7 @@ class StopSignal : Exception()
 /** Executa as ações. Para criar uma ação nova: adicione o Spec no Catalog e um `"id" -> ...` aqui. */
 object Actions {
 
-    private fun sh(cmd: String): String {
+    internal fun sh(cmd: String): String {
         if (!Sh.running()) throw IllegalStateException("Shizuku não está rodando")
         if (!Sh.granted()) throw IllegalStateException("Fluxo ainda não tem permissão no Shizuku")
         val r = Sh.run(cmd)
@@ -25,7 +25,7 @@ object Actions {
     private fun on(p: Map<String, String>) = p["state"] != "off"
     private fun en(p: Map<String, String>) = if (on(p)) "enable" else "disable"
     private fun lig(p: Map<String, String>) = if (on(p)) "ligado" else "desligado"
-    private fun q(s: String) = "'" + s.replace("'", "'\\''") + "'"
+    internal fun q(s: String) = "'" + s.replace("'", "'\\''") + "'"
     private fun int(p: Map<String, String>, k: String, d: Int) = p[k]?.trim()?.toIntOrNull() ?: d
 
     suspend fun run(ctx: Context, id: String, p: Map<String, String>, vars: MutableMap<String, String>): String = when (id) {
@@ -163,6 +163,6 @@ object Actions {
             "Abriu ${p["url"]}"
         }
 
-        else -> throw IllegalArgumentException("ação desconhecida: $id")
+        else -> AutomateActions.run(ctx, id, p, vars) ?: throw IllegalArgumentException("ação desconhecida: $id")
     }
 }

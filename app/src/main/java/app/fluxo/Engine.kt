@@ -61,7 +61,7 @@ object Conditions {
                 else -> if (na != null && nb != null) na == nb else a == b
             }
         }
-        else -> false
+        else -> AutomateConds.eval(ctx, type, p) ?: false
     }
 }
 
