@@ -163,6 +163,6 @@ object Actions {
             "Abriu ${p["url"]}"
         }
 
-        else -> AutomateActions.run(ctx, id, p, vars) ?: throw IllegalArgumentException("ação desconhecida: $id")
+        else -> AutomateActions.run(ctx, id, p, vars) ?: ShortcutsActions.run(ctx, id, p, vars) ?: throw IllegalArgumentException("ação desconhecida: $id")
     }
 }

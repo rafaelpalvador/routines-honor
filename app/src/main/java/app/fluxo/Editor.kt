@@ -6,6 +6,7 @@ import android.app.TimePickerDialog
 import android.content.Intent
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -226,8 +227,9 @@ private fun StepList(steps: List<Step>, open: (Dlg) -> Unit, onChange: (List<Ste
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         steps.forEachIndexed { i, s ->
             val isIf = s.kind == "if"
-            val title = if (isIf) "SE  " + condText(s.cond) else Catalog.label(Kind.ACTION, s.type, s.params)
-            val spec = if (isIf) null else Catalog.find(Kind.ACTION, s.type)
+            val isLoop = s.kind == "loop"
+            val title = if (isIf) "SE  " + condText(s.cond) else if (isLoop) "REPETIR · " + Catalog.label(Kind.ACTION, "loop", s.params).removePrefix("Repetir: ") else Catalog.label(Kind.ACTION, s.type, s.params)
+            val spec = if (isIf) null else Catalog.find(Kind.ACTION, if (isLoop) "loop" else s.type)
             Card(
                 Modifier.fillMaxWidth().clickable {
                     if (isIf) open(Dlg.CondEdit(s.cond) { c -> onChange(steps.replaced(i, s.copy(cond = c))) })
@@ -235,16 +237,24 @@ private fun StepList(steps: List<Step>, open: (Dlg) -> Unit, onChange: (List<Ste
                 },
                 shape = RoundedCornerShape(20.dp),
                 colors = CardDefaults.cardColors(
-                    containerColor = if (isIf) MaterialTheme.colorScheme.tertiaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh,
+                    containerColor = if (isIf || isLoop) MaterialTheme.colorScheme.tertiaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh,
                 ),
             ) {
                 Row(Modifier.padding(start = 12.dp, top = 4.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                    IconChip(spec?.category, isIf)
+                    IconChip(spec?.category, isIf || isLoop)
                     Spacer(Modifier.width(12.dp))
                     Text(title, Modifier.weight(1f), maxLines = 3, overflow = TextOverflow.Ellipsis)
                     if (i > 0) IconButton(onClick = { onChange(steps.swapped(i, i - 1)) }) { Icon(Icons.Filled.KeyboardArrowUp, "Subir") }
                     if (i < steps.lastIndex) IconButton(onClick = { onChange(steps.swapped(i, i + 1)) }) { Icon(Icons.Filled.KeyboardArrowDown, "Descer") }
                     IconButton(onClick = { onChange(steps.filterIndexed { j, _ -> j != i }) }) { Icon(Icons.Outlined.Delete, "Remover") }
+                }
+            }
+            if (isLoop) {
+                Column(Modifier.padding(start = 18.dp).drawBehind {
+                    drawLine(tertiaryLine, Offset(-10f, 0f), Offset(-10f, size.height), strokeWidth = 4f)
+                }.padding(start = 6.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Tag("FAÇA (a cada repetição)")
+                    StepList(s.then, open) { n -> onChange(steps.replaced(i, s.copy(then = n))) }
                 }
             }
             if (isIf) {
@@ -260,7 +270,7 @@ private fun StepList(steps: List<Step>, open: (Dlg) -> Unit, onChange: (List<Ste
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = {
-                open(Dlg.Pick(Kind.ACTION) { sp, p -> onChange(steps + Step(type = sp.id, params = p)) })
+                open(Dlg.Pick(Kind.ACTION) { sp, p -> onChange(steps + (if (sp.id == "loop") Step(kind = "loop", type = "loop", params = p) else Step(type = sp.id, params = p))) })
             }) { Icon(Icons.Filled.Add, null); Spacer(Modifier.width(4.dp)); Text("Ação") }
             OutlinedButton(onClick = {
                 val st = Step(kind = "if")
@@ -313,15 +323,21 @@ fun InfoDialog(s: Spec, onDismiss: () -> Unit) {
 @Composable
 fun PickerSheet(kind: Kind, onDismiss: () -> Unit, onSelect: (Spec) -> Unit) {
     var q by remember { mutableStateOf("") }
-    var adv by remember { mutableStateOf(false) }
+    var adv by remember { mutableStateOf(true) }
+    var catSel by remember { mutableStateOf<String?>(null) }
     var info by remember { mutableStateOf<Spec?>(null) }
+    val cats = Catalog.all.filter { it.kind == kind && (adv || !it.advanced) }.map { it.category }.distinct()
     val list = Catalog.all.filter {
-        it.kind == kind && (adv || !it.advanced) &&
+        it.kind == kind && (adv || !it.advanced) && (catSel == null || it.category == catSel) &&
             (q.isBlank() || (it.title + " " + it.summary + " " + it.category).contains(q, ignoreCase = true))
     }
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(Modifier.padding(horizontal = 16.dp)) {
             OutlinedTextField(q, { q = it }, label = { Text("Buscar") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+            Row(Modifier.horizontalScroll(rememberScrollState()).padding(vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                FilterChip(selected = catSel == null, onClick = { catSel = null }, label = { Text("Todas") })
+                cats.forEach { c -> FilterChip(selected = catSel == c, onClick = { catSel = if (catSel == c) null else c }, label = { Text(c) }) }
+            }
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 6.dp)) {
                 Switch(adv, { adv = it })
                 Spacer(Modifier.width(8.dp))
@@ -413,6 +429,14 @@ private fun ParamField(p: P, value: String, onChange: (String) -> Unit) {
                 }
                 if (show) AppPickerDialog({ onChange(it); show = false }) { show = false }
             }
+            PT.LOCATION -> {
+                OutlinedTextField(value, onChange, modifier = Modifier.fillMaxWidth(), singleLine = true, placeholder = { Text("-23.55052,-46.63331") })
+                OutlinedButton(onClick = {
+                    val l = Geo.last(ctx)
+                    if (l != null) onChange("%.5f,%.5f".format(java.util.Locale.US, l.latitude, l.longitude))
+                    else android.widget.Toast.makeText(ctx, "Sem localização. Permita Localização na tela Configuração e abra o Maps um instante.", android.widget.Toast.LENGTH_LONG).show()
+                }) { Text("Usar minha localização atual") }
+            }
             PT.BTDEVICE -> {
                 val bonded = remember { Dev.bondedNames(ctx) }
                 OutlinedTextField(value, onChange, modifier = Modifier.fillMaxWidth(), singleLine = true,
@@ -448,6 +472,7 @@ private fun AppPickerDialog(onPick: (String) -> Unit, onDismiss: () -> Unit) {
             Column {
                 OutlinedTextField(q, { q = it }, label = { Text("Buscar") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                 LazyColumn(Modifier.heightIn(max = 360.dp)) {
+                    item(key = "any") { ListItem(headlineContent = { Text("Qualquer app / limpar") }, modifier = Modifier.clickable { onPick("") }) }
                     items(apps.filter { q.isBlank() || it.first.contains(q, ignoreCase = true) }, key = { it.second }) { (label, pkg) ->
                         ListItem(headlineContent = { Text(label) }, supportingContent = { Text(pkg, style = MaterialTheme.typography.labelSmall) },
                             modifier = Modifier.clickable { onPick(pkg) })

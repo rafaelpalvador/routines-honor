@@ -2,7 +2,7 @@ package app.fluxo
 
 enum class Kind { TRIGGER, CONDITION, ACTION }
 
-enum class PT { TEXT, NUMBER, CHOICE, TIME, DAYS, APP, BTDEVICE, MULTILINE }
+enum class PT { TEXT, NUMBER, CHOICE, TIME, DAYS, APP, BTDEVICE, MULTILINE, LOCATION }
 
 /** Um campo que o usuário preenche. */
 data class P(
@@ -289,7 +289,7 @@ object Catalog {
             "Abre um endereço (site ou link de app) no navegador ou no app que o suporta.",
             "Digite o endereço completo, com https://.", "Cheguei em casa → abrir a página do painel de casa.",
             P("url", "Endereço", def = "https://"), shizuku = true, advanced = true),
-    ) + AutomateCatalog.all
+    ) + ShortcutsCatalog.all + AutomateCatalog.all
 
     fun find(kind: Kind, id: String): Spec? = all.firstOrNull { it.kind == kind && it.id == id }
 

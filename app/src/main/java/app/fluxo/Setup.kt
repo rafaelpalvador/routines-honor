@@ -80,6 +80,26 @@ fun SetupScreen(onBack: () -> Unit) {
             has(Manifest.permission.POST_NOTIFICATIONS), "Permitir") { permLauncher.launch(Manifest.permission.POST_NOTIFICATIONS) },
         Item("Localização", "O Android só informa o nome do Wi-Fi se o app tiver localização. Necessário para gatilhos de Wi-Fi por nome.",
             has(Manifest.permission.ACCESS_FINE_LOCATION), "Permitir") { permLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION) },
+        Item("Localização em segundo plano", "Para os gatilhos 'Chegar/sair de um lugar'. Com o Shizuku é 1 toque; sem ele, escolha 'Permitir o tempo todo' nas configurações.",
+            has(Manifest.permission.ACCESS_BACKGROUND_LOCATION), if (Sh.available()) "Conceder (Shizuku)" else "Abrir configurações") {
+            if (Sh.available()) Thread { Sh.run("pm grant ${ctx.packageName} android.permission.ACCESS_BACKGROUND_LOCATION"); tick++ }.start()
+            else open(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, pkgUri))
+        },
+        Item("Acesso ao uso de apps", "Para o gatilho 'App aberto/fechado'.",
+            ctx.getSystemService(android.app.AppOpsManager::class.java)
+                .unsafeCheckOpNoThrow("android:get_usage_stats", android.os.Process.myUid(), ctx.packageName) == android.app.AppOpsManager.MODE_ALLOWED,
+            if (Sh.available()) "Conceder (Shizuku)" else "Abrir configurações") {
+            if (Sh.available()) Thread { Sh.run("appops set ${ctx.packageName} GET_USAGE_STATS allow"); tick++ }.start()
+            else open(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
+        },
+        Item("Acesso às notificações", "Para o gatilho 'Notificação recebida'.",
+            androidx.core.app.NotificationManagerCompat.getEnabledListenerPackages(ctx).contains(ctx.packageName),
+            if (Sh.available()) "Conceder (Shizuku)" else "Abrir configurações") {
+            if (Sh.available()) Thread { Sh.run("cmd notification allow_listener ${ctx.packageName}/${ctx.packageName}.NotifService"); tick++ }.start()
+            else open(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+        },
+        Item("Receber SMS", "Para o gatilho 'SMS recebido' (depois de permitir, feche e abra o Fluxo).",
+            has(Manifest.permission.RECEIVE_SMS), "Permitir") { permLauncher.launch(Manifest.permission.RECEIVE_SMS) },
         Item("Bluetooth", "Para saber qual aparelho Bluetooth conectou.",
             has(Manifest.permission.BLUETOOTH_CONNECT), "Permitir") { permLauncher.launch(Manifest.permission.BLUETOOTH_CONNECT) },
         Item("Telefone", "Para gatilhos de chamada (tocando, atendida, terminou).",

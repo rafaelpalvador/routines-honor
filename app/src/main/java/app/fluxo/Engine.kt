@@ -17,7 +17,7 @@ object Conditions {
     }
 
     private fun leaf(ctx: Context, l: CondLeaf, vars: Map<String, String>): Boolean {
-        val r = runCatching { raw(ctx, l.type, l.params, vars) }.getOrDefault(false)
+        val r = runCatching { raw(ctx, l.type, l.params.mapValues { Engine.sub(ctx, it.value) }, vars) }.getOrDefault(false)
         return if (l.negate) !r else r
     }
 
@@ -61,7 +61,7 @@ object Conditions {
                 else -> if (na != null && nb != null) na == nb else a == b
             }
         }
-        else -> AutomateConds.eval(ctx, type, p) ?: false
+        else -> AutomateConds.eval(ctx, type, p) ?: ShortcutsActions.cond(ctx, type, p, vars) ?: false
     }
 }
 
@@ -73,6 +73,8 @@ object Engine {
 
     /** Chamado pelo EngineService quando algo acontece no aparelho. */
     fun onEvent(ctx: Context, type: String, data: Map<String, String>) {
+        Store.routines.value.filter { it.enabled && it.triggers.any { t -> matches(t, type, data) } }.takeIf { it.isNotEmpty() }
+            ?.let { data.forEach { (k, v) -> if (k.startsWith("var.")) vars[k.removePrefix("var.")] = v } }
         Store.routines.value.filter { it.enabled }.forEach { r ->
             if (r.triggers.any { matches(it, type, data) }) run(ctx, r, "gatilho: ${Catalog.find(Kind.TRIGGER, type)?.title ?: type}")
         }
@@ -92,6 +94,16 @@ object Engine {
                 val pr = d["prev"]?.toIntOrNull() ?: return false
                 if (p["when"] == "above") (pr < x && n >= x) else (pr >= x && n < x)
             }
+            "boot", "shake", "volume", "timezone" -> true
+            "interval" -> d["tid"] == t.id
+            "place", "sun" -> d["tid"] == t.id && p["when"] == d["state"]
+            "app_open" -> p["pkg"].orEmpty() == d["pkg"] && p["when"] == d["state"]
+            "app_install" -> p["when"] == d["state"] && (p["pkg"].isNullOrBlank() || p["pkg"] == d["pkg"])
+            "notification" -> (p["pkg"].isNullOrBlank() || p["pkg"] == d["pkg"]) &&
+                (p["contains"].isNullOrBlank() || (d["title"].orEmpty() + " " + d["text"].orEmpty()).contains(p["contains"].orEmpty(), ignoreCase = true))
+            "sms" -> (p["from"].isNullOrBlank() || d["from"].orEmpty().contains(p["from"].orEmpty())) &&
+                (p["contains"].isNullOrBlank() || d["text"].orEmpty().contains(p["contains"].orEmpty(), ignoreCase = true))
+            "broadcast" -> p["action"].orEmpty() == d["action"]
             else -> p["when"] == d["state"]
         }
     }
@@ -119,7 +131,17 @@ object Engine {
 
     private suspend fun runSteps(ctx: Context, steps: List<Step>) {
         for (s in steps) {
-            if (s.kind == "if") {
+            if (s.kind == "loop") {
+                val pr = s.params.mapValues { sub(ctx, it.value) }
+                val list = if (pr["mode"] == "each") vars[pr["list"].orEmpty().trim()].orEmpty().split(",").map { it.trim() }.filter { it.isNotEmpty() }
+                else List((pr["count"]?.trim()?.toIntOrNull() ?: 1).coerceIn(0, 1000)) { (it + 1).toString() }
+                val iv = pr["item"].orEmpty().trim().ifBlank { "item" }
+                RunLog.add("   REPETIR → ${list.size}x")
+                for ((n, v) in list.withIndex().take(1000)) {
+                    vars[iv] = v; vars["indice"] = (n + 1).toString()
+                    runSteps(ctx, s.then)
+                }
+            } else if (s.kind == "if") {
                 val ok = Conditions.eval(ctx, s.cond, vars)
                 RunLog.add("   SE → ${if (ok) "verdadeiro" else "falso"}")
                 runSteps(ctx, if (ok) s.then else s.otherwise)
@@ -138,7 +160,7 @@ object Engine {
     }
 
     /** Troca {bateria}, {hora}, {wifi} e {suaVariavel} pelos valores atuais. */
-    private fun sub(ctx: Context, s: String): String {
+    internal fun sub(ctx: Context, s: String): String {
         if (!s.contains('{')) return s
         return Regex("\\{(\\w+)\\}").replace(s) { m ->
             when (val k = m.groupValues[1]) {

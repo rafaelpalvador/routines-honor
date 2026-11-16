@@ -24,7 +24,25 @@ import android.os.Looper
 import android.telephony.TelephonyCallback
 import android.telephony.TelephonyManager
 import androidx.core.content.ContextCompat
+import android.app.usage.UsageEvents
+import android.app.usage.UsageStatsManager
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
+import android.location.LocationListener
+import android.location.LocationManager
+import android.net.wifi.WifiManager
+import android.provider.Telephony
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import java.util.Calendar
+import java.util.concurrent.ConcurrentHashMap
 
 /** Liga/garante o serviço que fica ouvindo os eventos do aparelho. */
 object Svc {
@@ -43,6 +61,15 @@ class EngineService : Service() {
     private var lastNight: Boolean? = null
     private var lastCall = TelephonyManager.CALL_STATE_IDLE
     private var lastSsid = ""
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val dyn = mutableListOf<BroadcastReceiver>()
+    private var shakeL: SensorEventListener? = null
+    private var usageJob: Job? = null
+    private var tickJob: Job? = null
+    private var locL: LocationListener? = null
+    private val inside = ConcurrentHashMap<String, Boolean>()
+    private val lastRun = ConcurrentHashMap<String, Long>()
+    private val sunDone = ConcurrentHashMap<String, String>()
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -60,11 +87,15 @@ class EngineService : Service() {
         startForeground(1, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
         registerAll()
         Alarms.rescheduleAll(this)
+        scope.launch(Dispatchers.Main) { Store.routines.collect { refreshDynamic() } }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
 
     override fun onDestroy() {
+        scope.coroutineContext[Job]?.cancel()
+        dyn.forEach { runCatching { unregisterReceiver(it) } }
+        stopShake(); stopPlaces()
         receivers.forEach { runCatching { unregisterReceiver(it) } }
         receivers.clear()
         netCb?.let { runCatching { getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(it) } }
@@ -76,11 +107,11 @@ class EngineService : Service() {
         Engine.onEvent(applicationContext, type, mapOf(*data))
     }
 
-    private fun reg(vararg actions: String, onR: (Intent) -> Unit) {
+    private fun reg(vararg actions: String, scheme: String? = null, onR: (Intent) -> Unit) {
         val r = object : BroadcastReceiver() {
             override fun onReceive(c: Context, i: Intent) = onR(i)
         }
-        val f = IntentFilter().apply { actions.forEach { addAction(it) } }
+        val f = IntentFilter().apply { actions.forEach { addAction(it) }; scheme?.let { addDataScheme(it) } }
         ContextCompat.registerReceiver(this, r, f, ContextCompat.RECEIVER_EXPORTED)
         receivers += r
     }
@@ -151,6 +182,51 @@ class EngineService : Service() {
             cm.registerNetworkCallback(req, cb)
             netCb = cb
         }
+        // Não incomodar
+        reg(NotificationManager.ACTION_INTERRUPTION_FILTER_CHANGED) {
+            val on = getSystemService(NotificationManager::class.java).currentInterruptionFilter != NotificationManager.INTERRUPTION_FILTER_ALL
+            fire("dnd", "state" to if (on) "on" else "off")
+        }
+        // Modo de som
+        reg(AudioManager.RINGER_MODE_CHANGED_ACTION) {
+            val m = when (getSystemService(AudioManager::class.java).ringerMode) {
+                AudioManager.RINGER_MODE_SILENT -> "silent"
+                AudioManager.RINGER_MODE_VIBRATE -> "vibrate"
+                else -> "normal"
+            }
+            fire("ringer", "state" to m)
+        }
+        // Volume
+        reg("android.media.VOLUME_CHANGED_ACTION") { fire("volume", "state" to "changed") }
+        // Bluetooth / Wi-Fi ligar-desligar
+        reg(android.bluetooth.BluetoothAdapter.ACTION_STATE_CHANGED) { i ->
+            when (i.getIntExtra(android.bluetooth.BluetoothAdapter.EXTRA_STATE, -1)) {
+                android.bluetooth.BluetoothAdapter.STATE_ON -> fire("bt_state", "state" to "on")
+                android.bluetooth.BluetoothAdapter.STATE_OFF -> fire("bt_state", "state" to "off")
+            }
+        }
+        reg(WifiManager.WIFI_STATE_CHANGED_ACTION) { i ->
+            when (i.getIntExtra(WifiManager.EXTRA_WIFI_STATE, -1)) {
+                WifiManager.WIFI_STATE_ENABLED -> fire("wifi_state", "state" to "on")
+                WifiManager.WIFI_STATE_DISABLED -> fire("wifi_state", "state" to "off")
+            }
+        }
+        reg(Intent.ACTION_TIMEZONE_CHANGED) { fire("timezone", "state" to "changed") }
+        // Apps instalados/removidos
+        reg(Intent.ACTION_PACKAGE_ADDED, Intent.ACTION_PACKAGE_REMOVED, scheme = "package") { i ->
+            if (i.getBooleanExtra(Intent.EXTRA_REPLACING, false)) return@reg
+            val pkg = i.data?.schemeSpecificPart.orEmpty()
+            fire("app_install", "state" to if (i.action == Intent.ACTION_PACKAGE_ADDED) "install" else "remove", "pkg" to pkg, "var.app" to pkg)
+        }
+        // SMS
+        if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.RECEIVE_SMS) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            reg(Telephony.Sms.Intents.SMS_RECEIVED_ACTION) { i ->
+                val msgs = Telephony.Sms.Intents.getMessagesFromIntent(i)
+                val from = msgs.firstOrNull()?.originatingAddress.orEmpty()
+                val body = msgs.joinToString("") { it.messageBody.orEmpty() }
+                fire("sms", "from" to from, "text" to body, "var.sms_de" to from, "var.sms_texto" to body)
+            }
+        }
         // Chamadas
         runCatching {
             val tm = getSystemService(TelephonyManager::class.java)
@@ -167,6 +243,134 @@ class EngineService : Service() {
             }
             tm.registerTelephonyCallback(mainExecutor, cb)
             telCb = cb
+        }
+    }
+
+    // ───── gatilhos que só ficam ligados se alguma rotina usa ─────
+    private fun trigs(type: String): List<TriggerDef> =
+        Store.routines.value.filter { it.enabled }.flatMap { r -> r.triggers.filter { it.type == type } }
+
+    private fun refreshDynamic() {
+        // broadcasts personalizados
+        dyn.forEach { runCatching { unregisterReceiver(it) } }
+        dyn.clear()
+        trigs("broadcast").map { it.params["action"].orEmpty().trim() }.filter { it.isNotEmpty() }.distinct().forEach { action ->
+            val r = object : BroadcastReceiver() {
+                override fun onReceive(c: Context, i: Intent) {
+                    fire("broadcast", "action" to action, "var.broadcast_texto" to (i.getStringExtra("extra") ?: ""))
+                }
+            }
+            runCatching { ContextCompat.registerReceiver(this, r, IntentFilter(action), ContextCompat.RECEIVER_EXPORTED); dyn += r }
+        }
+        if (trigs("shake").isNotEmpty()) startShake() else stopShake()
+        if (trigs("place").isNotEmpty()) startPlaces() else stopPlaces()
+        if (trigs("app_open").isNotEmpty()) startUsage() else { usageJob?.cancel(); usageJob = null }
+        if (trigs("interval").isNotEmpty() || trigs("sun").isNotEmpty()) startTick() else { tickJob?.cancel(); tickJob = null }
+    }
+
+    private fun startShake() {
+        if (shakeL != null) return
+        val sm = getSystemService(SensorManager::class.java)
+        val acc = sm.getDefaultSensor(Sensor.TYPE_ACCELEROMETER) ?: return
+        var last = 0L
+        var hits = 0
+        var first = 0L
+        val l = object : SensorEventListener {
+            override fun onSensorChanged(e: SensorEvent) {
+                val g = Math.sqrt((e.values[0] * e.values[0] + e.values[1] * e.values[1] + e.values[2] * e.values[2]).toDouble()) / 9.81
+                val now = System.currentTimeMillis()
+                if (g > 2.7 && now - last > 250) {
+                    last = now
+                    if (now - first > 1200) { hits = 0; first = now }
+                    hits++
+                    if (hits >= 2) { hits = 0; fire("shake", "state" to "shake") }
+                }
+            }
+            override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+        }
+        sm.registerListener(l, acc, SensorManager.SENSOR_DELAY_GAME)
+        shakeL = l
+    }
+
+    private fun stopShake() {
+        shakeL?.let { runCatching { getSystemService(SensorManager::class.java).unregisterListener(it) } }
+        shakeL = null
+    }
+
+    private fun startUsage() {
+        if (usageJob?.isActive == true) return
+        usageJob = scope.launch {
+            val usm = getSystemService(UsageStatsManager::class.java)
+            var last = System.currentTimeMillis()
+            var cur = ""
+            while (isActive) {
+                val now = System.currentTimeMillis()
+                var top: String? = null
+                runCatching {
+                    val ev = usm.queryEvents(last - 2000, now)
+                    val e = UsageEvents.Event()
+                    while (ev.hasNextEvent()) {
+                        ev.getNextEvent(e)
+                        if (e.eventType == UsageEvents.Event.ACTIVITY_RESUMED) top = e.packageName
+                    }
+                }
+                last = now
+                val t = top
+                if (t != null && t != cur && t != packageName) {
+                    if (cur.isNotEmpty()) fire("app_open", "pkg" to cur, "state" to "close", "var.app" to cur)
+                    cur = t
+                    fire("app_open", "pkg" to t, "state" to "open", "var.app" to t)
+                }
+                delay(1500)
+            }
+        }
+    }
+
+    @Suppress("MissingPermission")
+    private fun startPlaces() {
+        if (locL != null) return
+        val lm = getSystemService(LocationManager::class.java)
+        val l = LocationListener { loc ->
+            trigs("place").forEach { t ->
+                val g = Geo.parse(t.params["loc"]) ?: return@forEach
+                val rad = t.params["radius"]?.trim()?.toFloatOrNull() ?: 150f
+                val now = Geo.dist(g.first, g.second, loc) <= rad
+                val prev = inside.put(t.id, now)
+                if (prev != null && prev != now) fire("place", "tid" to t.id, "state" to if (now) "arrive" else "leave")
+            }
+        }
+        val provider = if (lm.getProviders(true).contains(LocationManager.FUSED_PROVIDER)) LocationManager.FUSED_PROVIDER else LocationManager.NETWORK_PROVIDER
+        runCatching { lm.requestLocationUpdates(provider, 60_000L, 30f, l, Looper.getMainLooper()); locL = l }
+    }
+
+    private fun stopPlaces() {
+        locL?.let { runCatching { getSystemService(LocationManager::class.java).removeUpdates(it) } }
+        locL = null
+    }
+
+    private fun startTick() {
+        if (tickJob?.isActive == true) return
+        tickJob = scope.launch {
+            while (isActive) {
+                val now = System.currentTimeMillis()
+                trigs("interval").forEach { t ->
+                    val every = (t.params["minutes"]?.trim()?.toLongOrNull() ?: 30L).coerceAtLeast(1) * 60_000L
+                    val last = lastRun.getOrPut(t.id) { now }
+                    if (now - last >= every) { lastRun[t.id] = now; fire("interval", "tid" to t.id, "state" to "tick") }
+                }
+                trigs("sun").forEach { t ->
+                    val g = Geo.parse(t.params["loc"]) ?: return@forEach
+                    val tm = Sun.times(g.first, g.second) ?: return@forEach
+                    val rise = t.params["when"] == "sunrise"
+                    val target = (if (rise) tm.first else tm.second) + (t.params["offset"]?.trim()?.toLongOrNull() ?: 0L) * 60_000L
+                    val key = java.text.SimpleDateFormat("yyyyMMdd", java.util.Locale.US).format(java.util.Date(now))
+                    if (now in target until target + 60_000L && sunDone[t.id] != key) {
+                        sunDone[t.id] = key
+                        fire("sun", "tid" to t.id, "state" to (if (rise) "sunrise" else "sunset"))
+                    }
+                }
+                delay(20_000)
+            }
         }
     }
 }
@@ -239,6 +443,7 @@ class AlarmReceiver : BroadcastReceiver() {
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         Store.init(context)
+        if (intent.action == Intent.ACTION_BOOT_COMPLETED) Engine.onEvent(context, "boot", mapOf("state" to "boot"))
         Alarms.rescheduleAll(context)
         Svc.ensure(context)
     }
